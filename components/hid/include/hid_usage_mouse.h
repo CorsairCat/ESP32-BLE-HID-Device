@@ -23,8 +23,7 @@ typedef struct {
         };
         uint8_t val;
     } buttons;
-    int8_t x_displacement;
-    int8_t y_displacement;
+    int8_t displacement[3];
     int8_t z_displacement;
 } __attribute__((packed)) hid_mouse_input_report_boot_t;
 

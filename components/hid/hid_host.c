@@ -995,6 +995,7 @@ esp_err_t hid_host_claim_interface(const hid_host_interface_config_t *iface_conf
     // Set BOOT protocol for interface
     HID_RETURN_ON_ERROR (hid_class_request_get_protocol(iface, &report_protocol) );
 
+    /*
     if (report_protocol != HID_REPORT_PROTOCOL_BOOT) {
         HID_RETURN_ON_ERROR( hid_class_request_set_protocol(iface, HID_REPORT_PROTOCOL_BOOT) );
         // verify that protocol has been successfully changed
@@ -1002,6 +1003,19 @@ esp_err_t hid_host_claim_interface(const hid_host_interface_config_t *iface_conf
         HID_RETURN_ON_ERROR (hid_class_request_get_protocol(iface, &report_protocol) );
 
         if (report_protocol != HID_REPORT_PROTOCOL_BOOT) {
+            ESP_LOGE(TAG, "Interface %d Set BOOT Protocol Failure, protocol=%d",
+                     iface->num,
+                     report_protocol);
+        }
+    }
+    */
+    if (report_protocol != HID_REPORT_PROTOCOL_REPORT) {
+        HID_RETURN_ON_ERROR( hid_class_request_set_protocol(iface, HID_REPORT_PROTOCOL_REPORT) );
+        // verify that protocol has been successfully changed
+        report_protocol = HID_REPORT_PROTOCOL_MAX;
+        HID_RETURN_ON_ERROR (hid_class_request_get_protocol(iface, &report_protocol) );
+
+        if (report_protocol != HID_REPORT_PROTOCOL_REPORT) {
             ESP_LOGE(TAG, "Interface %d Set BOOT Protocol Failure, protocol=%d",
                      iface->num,
                      report_protocol);

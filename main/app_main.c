@@ -385,7 +385,6 @@ static void hid_host_mouse_report_callback(const uint8_t *const data, const int 
     // Calculate absolute position from displacement
     // x_pos += mouse_report->x_displacement;
     // y_pos += mouse_report->y_displacement;
-
     /* hid_print_new_device_report_header(HID_PROTOCOL_MOUSE);
 
     printf("X: %06d\tY: %06d\tZ: %06d\t|%c|%c|%c|%c|%c|\r",
@@ -401,9 +400,21 @@ static void hid_host_mouse_report_callback(const uint8_t *const data, const int 
         //uint8_t key_vaule = {HID_KEY_A};
         //esp_hidd_send_keyboard_value(hid_conn_id, 0, &key_vaule, 1);
         // esp_hidd_send_consumer_value(hid_conn_id, HID_CONSUMER_VOLUME_UP, true);
-        mouse_report->z_displacement = 0;
         // ESP_LOGI(TAG, "Leftclick: %d\r", mouse_report->buttons.val);
-        esp_hidd_send_mouse_value(hid_conn_id, mouse_report->buttons.val ,mouse_report->x_displacement, mouse_report->y_displacement, mouse_report->z_displacement);
+        int16_t *temp_pot;
+        temp_pot = &mouse_report->displacement[0];
+        int16_t x_disp = *temp_pot;
+        // x_disp = x_disp >> 4;
+        x_disp = (x_disp & 0x0800) ? (x_disp | 0xf800) : (x_disp & 0x07ff);
+        temp_pot = &mouse_report->displacement[1];
+        int16_t y_disp = *temp_pot;
+        y_disp = y_disp >> 4;
+        y_disp = (y_disp & 0x0800) ? (y_disp | 0xf800) : (y_disp & 0x07ff);
+        // y_disp = (y_disp & 0x07FF) | ((y_disp << 4) & 0x8000);
+        //y_disp = y_disp / 0x07FF * 0x7FFF;
+        // ESP_LOGI(TAG, "ori: %x %x %x", (uint8_t)mouse_report->x_displacement, (uint8_t)mouse_report->mix_displacement, (uint8_t)mouse_report->y_displacement);
+        // ESP_LOGI(TAG, "x: %d; y:%d", x_disp, y_disp);
+        esp_hidd_send_mouse_value(hid_conn_id, mouse_report->buttons.val, x_disp, y_disp, mouse_report->z_displacement);
     }
 }
 
