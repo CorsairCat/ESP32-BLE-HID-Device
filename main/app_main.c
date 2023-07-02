@@ -64,7 +64,13 @@ static bool send_volum_up = false;
 
 static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param);
 
-#define HIDD_DEVICE_NAME            "ESP HID Mouse"
+#define HIDD_DEVICE_NAME            "Rubbish Mouse"
+
+int curr_dev_id = 0;
+const char* ble_device_name[2] = {"Rubbish Mouse", "Rubbish Mouse-2"};
+esp_bd_addr_t rand_addr = {0xc3,0x11,0x11,0x11,0x11,0xc3};//{0xab,0x91,0x28,0x26,0xf3,0xad};
+esp_bd_addr_t rand_addr2 = {0xc3,0x91,0x28,0x26,0xf4,0xc3};
+
 static uint8_t hidd_service_uuid128[] = {
     /* LSB <--------------------------------------------------------------------------------> MSB */
     //first uuid, 16bit, [12],[13] is the value
@@ -91,7 +97,7 @@ static esp_ble_adv_params_t hidd_adv_params = {
     .adv_int_min        = 0x20,
     .adv_int_max        = 0x30,
     .adv_type           = ADV_TYPE_IND,
-    .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
+    .own_addr_type      = BLE_ADDR_TYPE_RANDOM,
     //.peer_addr            =
     //.peer_addr_type       =
     .channel_map        = ADV_CHNL_ALL,
@@ -363,6 +369,22 @@ static void hid_host_keyboard_report_callback(const uint8_t *const data, const i
     memcpy(prev_keys, &kb_report->key, HID_KEYBOARD_KEY_MAX);
 }
 
+static void switch_device()
+{
+    ESP_LOGI(HID_DEMO_TAG, "BLE Device Switch");
+    curr_dev_id = 1-curr_dev_id;
+    if (curr_dev_id) {esp_ble_gap_set_rand_addr(rand_addr2);}
+    else {esp_ble_gap_set_rand_addr(rand_addr);}
+    esp_ble_gap_set_device_name(ble_device_name[curr_dev_id]);//HIDD_DEVICE_NAME);
+    esp_ble_gap_config_adv_data(&hidd_adv_data);
+    if (sec_conn)
+    {
+        esp_ble_gatts_close(hidd_le_env.gatt_if, hid_conn_id);
+        sec_conn = false;
+    }
+    esp_ble_gap_start_advertising(&hidd_adv_params);
+}
+
 /**
  * @brief USB HID Host Mouse Interface report callback handler
  *
@@ -395,6 +417,7 @@ static void hid_host_mouse_report_callback(const uint8_t *const data, const int 
            (mouse_report->buttons.button4 ? 'o' : ' '),
            (mouse_report->buttons.button5 ? 'o' : ' '));
     fflush(stdout); */
+    if (mouse_report->buttons.button5) {switch_device(); return;}
     if (sec_conn) {
         // ESP_LOGI(HID_DEMO_TAG, "Send the movement");
         //uint8_t key_vaule = {HID_KEY_A};
@@ -569,10 +592,10 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
     switch(event) {
         case ESP_HIDD_EVENT_REG_FINISH: {
             if (param->init_finish.state == ESP_HIDD_INIT_OK) {
-                //esp_bd_addr_t rand_addr = {0x04,0x11,0x11,0x11,0x11,0x05};
-                esp_ble_gap_set_device_name(HIDD_DEVICE_NAME);
+                if (curr_dev_id) {esp_ble_gap_set_rand_addr(rand_addr2);}
+                else {esp_ble_gap_set_rand_addr(rand_addr);}
+                esp_ble_gap_set_device_name(ble_device_name[curr_dev_id]);//HIDD_DEVICE_NAME);
                 esp_ble_gap_config_adv_data(&hidd_adv_data);
-
             }
             break;
         }
