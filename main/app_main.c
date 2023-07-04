@@ -36,13 +36,18 @@
 #include "hid_usage_mouse.h"
 
 #include "driver/ledc.h"
+#include <sys/time.h>
+
+struct timeval tv_now;
+int64_t time_us_start;
+int64_t time_us_end;
 
 #define LEDC_TIMER              LEDC_TIMER_0
 #define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LEDC_OUTPUT_IO          (48) // Define the output GPIO
+#define LEDC_OUTPUT_IO          (38) // Define the output GPIO
 #define LEDC_CHANNEL            LEDC_CHANNEL_0
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY               (8190) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
+#define LEDC_DUTY               (2047) // Set duty to 50%. ((2 ** 13) - 1) * 50% = 4095
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
 #define READY_TO_UNINSTALL          (HOST_NO_CLIENT | HOST_ALL_FREE)
@@ -385,6 +390,11 @@ static void switch_device()
     esp_ble_gap_start_advertising(&hidd_adv_params);
 }
 
+uint8_t temp_ble_button = 0;
+int16_t temp_ble_displacement_x = 0;
+int16_t temp_ble_displacement_y = 0;
+int8_t temp_ble_wheel = 0;
+
 /**
  * @brief USB HID Host Mouse Interface report callback handler
  *
@@ -393,6 +403,8 @@ static void switch_device()
  */
 static void hid_host_mouse_report_callback(const uint8_t *const data, const int length)
 {
+    // gettimeofday(&tv_now, NULL);
+    // time_us_start = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
     hid_mouse_input_report_boot_t *mouse_report = (hid_mouse_input_report_boot_t *)data;
 
     // ESP_LOGI(TAG, "HID Device report length: %d; buffer len: %d", sizeof(hid_mouse_input_report_boot_t), length);
@@ -424,6 +436,8 @@ static void hid_host_mouse_report_callback(const uint8_t *const data, const int 
         //esp_hidd_send_keyboard_value(hid_conn_id, 0, &key_vaule, 1);
         // esp_hidd_send_consumer_value(hid_conn_id, HID_CONSUMER_VOLUME_UP, true);
         // ESP_LOGI(TAG, "Leftclick: %d\r", mouse_report->buttons.val);
+        /*
+        #ifdef DELL
         int16_t *temp_pot;
         temp_pot = &mouse_report->displacement[0];
         int16_t x_disp = *temp_pot;
@@ -433,11 +447,34 @@ static void hid_host_mouse_report_callback(const uint8_t *const data, const int 
         int16_t y_disp = *temp_pot;
         y_disp = y_disp >> 4;
         y_disp = (y_disp & 0x0800) ? (y_disp | 0xf800) : (y_disp & 0x07ff);
+        esp_hidd_send_mouse_value(hid_conn_id, mouse_report->buttons.val, x_disp, y_disp, mouse_report->z_displacement);
+        #endif
+        */
+        // #ifdef LOGITECH
+        // uint16_t mouse_button = mouse_report->buttons.val >> 8;
+        temp_ble_button = temp_ble_button | mouse_report->buttons.val;
+        temp_ble_displacement_x += mouse_report->displacement[0];
+        temp_ble_displacement_y += mouse_report->displacement[1];
+        temp_ble_wheel += mouse_report->z_displacement;
+        // if (esp_hidd_send_mouse_value(hid_conn_id, (uint8_t)mouse_report->buttons.val, mouse_report->displacement[0], mouse_report->displacement[1], mouse_report->z_displacement))
+        if (!send_lock)
+        {
+            esp_hidd_send_mouse_value(hid_conn_id, temp_ble_button, temp_ble_displacement_x, temp_ble_displacement_y, temp_ble_wheel);
+            temp_ble_button = 0;
+            temp_ble_displacement_x = 0;
+            temp_ble_displacement_y = 0;
+            temp_ble_wheel = 0;
+        }
+        // #endif
         // y_disp = (y_disp & 0x07FF) | ((y_disp << 4) & 0x8000);
         //y_disp = y_disp / 0x07FF * 0x7FFF;
         // ESP_LOGI(TAG, "ori: %x %x %x", (uint8_t)mouse_report->x_displacement, (uint8_t)mouse_report->mix_displacement, (uint8_t)mouse_report->y_displacement);
         // ESP_LOGI(TAG, "x: %d; y:%d", x_disp, y_disp);
-        esp_hidd_send_mouse_value(hid_conn_id, mouse_report->buttons.val, x_disp, y_disp, mouse_report->z_displacement);
+        // use this to trigger high prority
+        // gettimeofday(&tv_now, NULL);
+        // int64_t time_us_end = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+        // ESP_LOGW(TAG, "Callback func time usage: %lld us", time_us_end-time_us_start);
+        // ESP_LOGI(TAG, "C");
     }
 }
 
@@ -774,15 +811,15 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK( usb_host_install(&host_config) );
-    task_created = xTaskCreate(handle_usb_events, "usb_events", 4096, NULL, 2, &usb_events_task_handle);
+    task_created = xTaskCreate(handle_usb_events, "usb_events", 4096, NULL, 3, &usb_events_task_handle);
     assert(task_created);
 
     // hid host driver config
     const hid_host_driver_config_t hid_host_config = {
         .create_background_task = true,
-        .task_priority = 5,
+        .task_priority = configMAX_PRIORITIES - 2,
         .stack_size = 4096,
-        .core_id = 0,
+        .core_id = 1,
         .callback = hid_host_event_callback,
         .callback_arg = NULL
     };

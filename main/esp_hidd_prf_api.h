@@ -15,6 +15,8 @@
 extern "C" {
 #endif
 
+extern int8_t send_lock;
+
 typedef enum {
     ESP_HIDD_EVENT_REG_FINISH = 0,
     ESP_BAT_EVENT_REG,
@@ -160,7 +162,7 @@ void esp_hidd_send_consumer_value(uint16_t conn_id, uint8_t key_cmd, bool key_pr
 
 void esp_hidd_send_keyboard_value(uint16_t conn_id, key_mask_t special_key_mask, uint8_t *keyboard_cmd, uint8_t num_key);
 
-void esp_hidd_send_mouse_value(uint16_t conn_id, uint8_t mouse_button, int16_t mickeys_x, int16_t mickeys_y, int8_t wheel);
+int esp_hidd_send_mouse_value(uint16_t conn_id, uint8_t mouse_button, int16_t mickeys_x, int16_t mickeys_y, int8_t wheel);
 
 #ifdef __cplusplus
 }

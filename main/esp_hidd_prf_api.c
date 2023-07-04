@@ -120,10 +120,10 @@ void esp_hidd_send_keyboard_value(uint16_t conn_id, key_mask_t special_key_mask,
     return;
 }
 
-void esp_hidd_send_mouse_value(uint16_t conn_id, uint8_t mouse_button, int16_t mickeys_x, int16_t mickeys_y, int8_t wheel)
+int esp_hidd_send_mouse_value(uint16_t conn_id, uint8_t mouse_button, int16_t mickeys_x, int16_t mickeys_y, int8_t wheel)
 {
-    // if (send_lock) {return;}
-    // send_lock = 1;
+    if (send_lock) {return 0;}
+    send_lock = 1;
     uint8_t buffer[HID_MOUSE_IN_RPT_LEN];
 
     buffer[0] = mouse_button;   // Buttons
@@ -136,6 +136,6 @@ void esp_hidd_send_mouse_value(uint16_t conn_id, uint8_t mouse_button, int16_t m
 
     hid_dev_send_report(hidd_le_env.gatt_if, conn_id,
                         HID_RPT_ID_MOUSE_IN, HID_REPORT_TYPE_INPUT, HID_MOUSE_IN_RPT_LEN, buffer);
-    // send_lock = 0;
-    return;
+    send_lock = 0;
+    return 1;
 }

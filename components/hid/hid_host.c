@@ -613,7 +613,7 @@ static void in_xfer_done(usb_transfer_t *in_xfer)
     // ESP_LOGW(TAG, "Request size: %d", in_xfer->num_bytes);
     // ESP_LOGW(TAG, "Transfer size: %d", in_xfer->actual_num_bytes);
     if (iface->report_cb) {
-        iface->report_cb(in_xfer->data_buffer, in_xfer->actual_num_bytes+1);
+        iface->report_cb(in_xfer->data_buffer, in_xfer->actual_num_bytes);
     }
 
     usb_host_transfer_submit(in_xfer);
