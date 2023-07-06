@@ -551,7 +551,8 @@ static void ble_hid_sender()
         // ESP_LOGW(TAG, "Current BLE Include %d reports, overall %lld us", evt.steps, evt._time_stamp);
         // _last_time_stamp = evt._time_stamp;
         // wait here for rough 0.5ms for balance
-        usleep(500);
+        // usleep(700);
+        vTaskDelay(2 / portTICK_PERIOD_MS);
         if (xQueueSend(g_blehid_queue, &need_send, USBHID_MAX_DELAY) != pdTRUE)
             { ESP_LOGW(TAG, "Send receive queue fail"); }
         // xTaskResumeAll();
