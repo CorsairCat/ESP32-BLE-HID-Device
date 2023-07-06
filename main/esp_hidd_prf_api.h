@@ -17,6 +17,9 @@ extern "C" {
 
 extern int8_t send_lock;
 
+// HID mouse input report length
+#define HID_MOUSE_IN_RPT_LEN        6
+
 typedef enum {
     ESP_HIDD_EVENT_REG_FINISH = 0,
     ESP_BAT_EVENT_REG,

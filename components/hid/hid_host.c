@@ -869,6 +869,7 @@ static esp_err_t hid_host_iface_start_transfer(hid_iface_t *iface,
 
     ESP_LOGW(TAG, "Transfer submit size: %d", iface->in_xfer->num_bytes);
 
+    // vTaskSuspendAll ();
     // start data transfer
     return usb_host_transfer_submit(iface->in_xfer);
 }

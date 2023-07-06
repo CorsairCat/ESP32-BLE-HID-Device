@@ -17,6 +17,9 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_bt.h"
+#include "esp_timer.h"
+// #include "esp32/rom/ets_sys.h"
+#include "sys/unistd.h"
 
 #include "esp_hidd_prf_api.h"
 #include "esp_bt_defs.h"
@@ -39,6 +42,7 @@
 #include <sys/time.h>
 
 struct timeval tv_now;
+struct timeval tv_next;
 int64_t time_us_start;
 int64_t time_us_end;
 
@@ -51,6 +55,8 @@ int64_t time_us_end;
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
 #define READY_TO_UNINSTALL          (HOST_NO_CLIENT | HOST_ALL_FREE)
+#define USBHID_QUEUE_SIZE       20
+#define USBHID_MAX_DELAY        512
 
 /* Main char symbol for ENTER key */
 #define KEYBOARD_ENTER_MAIN_CHAR    '\r'
@@ -81,6 +87,10 @@ static uint8_t hidd_service_uuid128[] = {
     //first uuid, 16bit, [12],[13] is the value
     0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x12, 0x18, 0x00, 0x00,
 };
+
+// queue
+static QueueHandle_t g_usbhid_queue;
+static QueueHandle_t g_blehid_queue;
 
 static esp_ble_adv_data_t hidd_adv_data = {
     .set_scan_rsp = false,
@@ -390,10 +400,10 @@ static void switch_device()
     esp_ble_gap_start_advertising(&hidd_adv_params);
 }
 
-uint8_t temp_ble_button = 0;
-int16_t temp_ble_displacement_x = 0;
-int16_t temp_ble_displacement_y = 0;
-int8_t temp_ble_wheel = 0;
+hid_mouse_input_report_queue_t hold_hid_reports;
+uint8_t tmp_state;
+uint8_t need_send = 1;
+uint64_t _last_time_stamp = 0;
 
 /**
  * @brief USB HID Host Mouse Interface report callback handler
@@ -452,29 +462,99 @@ static void hid_host_mouse_report_callback(const uint8_t *const data, const int 
         */
         // #ifdef LOGITECH
         // uint16_t mouse_button = mouse_report->buttons.val >> 8;
-        temp_ble_button = temp_ble_button | mouse_report->buttons.val;
-        temp_ble_displacement_x += mouse_report->displacement[0];
-        temp_ble_displacement_y += mouse_report->displacement[1];
-        temp_ble_wheel += mouse_report->z_displacement;
-        // if (esp_hidd_send_mouse_value(hid_conn_id, (uint8_t)mouse_report->buttons.val, mouse_report->displacement[0], mouse_report->displacement[1], mouse_report->z_displacement))
-        if (!send_lock)
-        {
-            esp_hidd_send_mouse_value(hid_conn_id, temp_ble_button, temp_ble_displacement_x, temp_ble_displacement_y, temp_ble_wheel);
-            temp_ble_button = 0;
-            temp_ble_displacement_x = 0;
-            temp_ble_displacement_y = 0;
-            temp_ble_wheel = 0;
+        /*
+        hid_mouse_input_report_boot_t evt;
+        memcpy(&evt, mouse_report, sizeof(hid_mouse_input_report_boot_t));
+        if (xQueueSend(g_usbhid_queue, &evt, USBHID_MAX_DELAY) != pdTRUE) {
+            ESP_LOGW(TAG, "Send receive queue fail");
         }
-        // #endif
-        // y_disp = (y_disp & 0x07FF) | ((y_disp << 4) & 0x8000);
-        //y_disp = y_disp / 0x07FF * 0x7FFF;
-        // ESP_LOGI(TAG, "ori: %x %x %x", (uint8_t)mouse_report->x_displacement, (uint8_t)mouse_report->mix_displacement, (uint8_t)mouse_report->y_displacement);
-        // ESP_LOGI(TAG, "x: %d; y:%d", x_disp, y_disp);
-        // use this to trigger high prority
-        // gettimeofday(&tv_now, NULL);
-        // int64_t time_us_end = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
-        // ESP_LOGW(TAG, "Callback func time usage: %lld us", time_us_end-time_us_start);
-        // ESP_LOGI(TAG, "C");
+        */
+        hold_hid_reports.buttons.val = hold_hid_reports.buttons.val | mouse_report->buttons.val;
+        hold_hid_reports.displacement[0] += mouse_report->displacement[0];
+        hold_hid_reports.displacement[1] += mouse_report->displacement[1];
+        hold_hid_reports.z_displacement += mouse_report->z_displacement;
+        hold_hid_reports.steps += 1;
+        // _last_time_stamp = esp_timer_get_time();
+        if (xQueueReceive(g_blehid_queue, &tmp_state, 0) == pdTRUE)
+        {
+            // hold_hid_reports._time_stamp = esp_timer_get_time() - _last_time_stamp;
+            if (xQueueSend(g_usbhid_queue, &hold_hid_reports, 0) != pdTRUE) 
+            {
+                // ESP_LOGW(TAG, "Send receive queue fail");
+                xQueueSend(g_blehid_queue, &tmp_state, 0);
+            }
+            else
+            {
+                hold_hid_reports.buttons.val = 0;
+                hold_hid_reports.displacement[0] = 0;
+                hold_hid_reports.displacement[1] = 0;
+                hold_hid_reports.z_displacement = 0;
+                hold_hid_reports.steps = 0;
+            }
+        }
+        // vTaskDelay(1 / portTICK_PERIOD_MS);
+        // ESP_LOGW(TAG, "C");
+    }
+}
+
+/*
+static void ble_hid_proceed()
+{
+    hid_mouse_input_report_boot_t evt;
+    while (xQueueReceive(g_usbhid_queue, &evt, portMAX_DELAY) == pdTRUE)
+    {
+        while (send_lock) 
+        {
+            //delay hold and wait;
+        }
+        temp_ble_button = temp_ble_button | evt.buttons.val;
+        temp_ble_displacement_x += evt.displacement[0];
+        temp_ble_displacement_y += evt.displacement[1];
+        temp_ble_wheel += evt.z_displacement;
+        if (!need_send)
+        {
+            need_send = 1;
+            if (xQueueSend(g_blehid_queue, &need_send, USBHID_MAX_DELAY) != pdTRUE) {
+                ESP_LOGW(TAG, "Send receive queue fail");
+            }
+        }
+        // if (esp_hidd_send_mouse_value(hid_conn_id, (uint8_t)mouse_report->buttons.val, mouse_report->displacement[0], mouse_report->displacement[1], mouse_report->z_displacement))
+        // int64_t time_us_start = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+        // int64_t time_us_end = (int64_t)tv_next.tv_sec * 1000000L + (int64_t)tv_next.tv_usec; 
+        // ESP_LOGW(TAG, "USB Time: %lld", time_us_end - time_us_start);
+        // ESP_LOGW(TAG, "USB");
+    }
+}
+*/
+
+static void ble_hid_sender()
+{
+    uint8_t buffer[HID_MOUSE_IN_RPT_LEN];
+    hid_mouse_input_report_queue_t evt;
+    // need_send = 1;
+    // initial
+    if (xQueueSend(g_blehid_queue, &need_send, USBHID_MAX_DELAY) != pdTRUE) 
+        { ESP_LOGW(TAG, "Send receive queue fail"); }
+    while (xQueueReceive(g_usbhid_queue, &evt, portMAX_DELAY) == pdTRUE)
+    {// wait for the packing of data from usb
+        // vTaskSuspendAll ();
+        buffer[0] = evt.buttons.val;                    // Buttons
+        buffer[1] = evt.z_displacement;                 // Wheel
+        buffer[2] = evt.displacement[0];                // X
+        buffer[3] = evt.displacement[0] >> 8;           // X lower
+        buffer[4] = evt.displacement[1];                // Y
+        buffer[5] = evt.displacement[1] >> 8;           // Y lower
+        // ESP_LOGI(HID_LE_PRF_TAG, "Leftclick: %d\r", buffer[0]);
+        hid_dev_send_report(hidd_le_env.gatt_if, hid_conn_id,
+                            HID_RPT_ID_MOUSE_IN, HID_REPORT_TYPE_INPUT, HID_MOUSE_IN_RPT_LEN, buffer);
+        // send calling queue back to usb func and ask for next commands for send
+        // ESP_LOGW(TAG, "Current BLE Include %d reports, overall %lld us", evt.steps, evt._time_stamp);
+        // _last_time_stamp = evt._time_stamp;
+        // wait here for rough 0.5ms for balance
+        usleep(500);
+        if (xQueueSend(g_blehid_queue, &need_send, USBHID_MAX_DELAY) != pdTRUE)
+            { ESP_LOGW(TAG, "Send receive queue fail"); }
+        // xTaskResumeAll();
     }
 }
 
@@ -728,6 +808,18 @@ void app_main(void)
     }
     ESP_ERROR_CHECK( ret );
 
+    g_usbhid_queue = xQueueCreate(USBHID_QUEUE_SIZE, sizeof(hid_mouse_input_report_queue_t));
+    if (g_usbhid_queue == NULL) {
+        ESP_LOGE(TAG, "Create mutex fail");
+        return;
+    }
+
+    g_blehid_queue = xQueueCreate(USBHID_QUEUE_SIZE, sizeof(uint8_t));
+    if (g_blehid_queue == NULL) {
+        ESP_LOGE(TAG, "Create mutex fail");
+        return;
+    }
+
     // Set the LEDC peripheral configuration
     // example_ledc_init();
     // Set duty to 50%
@@ -789,6 +881,8 @@ void app_main(void)
     // xTaskCreate(&hid_demo_task, "hid_task", 2048, NULL, 5, NULL);
 
     TaskHandle_t usb_events_task_handle;
+    TaskHandle_t blehid_proc_handle;
+    TaskHandle_t blehid_send_handle;
     hid_host_device_handle_t hid_device;
 
     BaseType_t task_created;
@@ -825,6 +919,11 @@ void app_main(void)
     };
 
     ESP_ERROR_CHECK( hid_host_install(&hid_host_config) );
+
+    // task_created = xTaskCreatePinnedToCore(ble_hid_proceed, "blehid_proc_evt", 4096, NULL, configMAX_PRIORITIES - 1, &blehid_proc_handle, 1);
+    // assert(task_created);
+    task_created = xTaskCreatePinnedToCore(ble_hid_sender, "blehid_send_evt", 4096, NULL, configMAX_PRIORITIES - 4, &blehid_send_handle, 0);
+    assert(task_created);
 
     do {
         EventBits_t event = xEventGroupWaitBits(usb_flags, USB_EVENTS_TO_WAIT, pdTRUE, pdFALSE, pdMS_TO_TICKS(APP_QUIT_PIN_POLL_MS));
