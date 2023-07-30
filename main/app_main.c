@@ -18,6 +18,8 @@
 #include "nvs_flash.h"
 #include "esp_bt.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
+#include "esp_wifi_types.h"
 // #include "esp32/rom/ets_sys.h"
 #include "sys/unistd.h"
 
@@ -58,6 +60,21 @@ int64_t time_us_end;
 #define USBHID_QUEUE_SIZE       20
 #define USBHID_MAX_DELAY        512
 
+typedef struct {
+	uint8_t frame_ctrl[2];
+	uint8_t duration_id[2];
+	uint8_t addr1[6]; /* receiver address */
+	uint8_t addr2[6]; /* sender address */
+	uint8_t addr3[6]; /* filtering address */
+	unsigned sequence_ctrl:16;
+	uint8_t addr4[6]; /* optional */
+} wifi_ieee80211_mac_hdr_t;
+
+typedef struct {
+	wifi_ieee80211_mac_hdr_t hdr;
+	uint8_t payload[0]; /* network data ended with 4 bytes csum (CRC32) */
+} wifi_ieee80211_packet_t;
+
 /* Main char symbol for ENTER key */
 #define KEYBOARD_ENTER_MAIN_CHAR    '\r'
 /* When set to 1 pressing ENTER will be extending with LineFeed during serial debug output */
@@ -76,7 +93,10 @@ static bool send_volum_up = false;
 static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param);
 
 #define HIDD_DEVICE_NAME            "Rubbish Mouse"
+#define DEV_BLE_CONN_MODE 0
+#define DEV_WIFI_CONN_MODE 1
 
+int system_mode = DEV_WIFI_CONN_MODE;
 int curr_dev_id = 0;
 const char* ble_device_name[2] = {"Rubbish Mouse", "Rubbish Mouse-2"};
 esp_bd_addr_t rand_addr = {0xc3,0x11,0x11,0x11,0x11,0xc3};//{0xab,0x91,0x28,0x26,0xf3,0xad};
@@ -440,35 +460,12 @@ static void hid_host_mouse_report_callback(const uint8_t *const data, const int 
            (mouse_report->buttons.button5 ? 'o' : ' '));
     fflush(stdout); */
     if (mouse_report->buttons.button5) {switch_device(); return;}
+    if (system_mode == DEV_WIFI_CONN_MODE)
+    {
+        xQueueSend(g_usbhid_queue, mouse_report, 0);
+        return;
+    }
     if (sec_conn) {
-        // ESP_LOGI(HID_DEMO_TAG, "Send the movement");
-        //uint8_t key_vaule = {HID_KEY_A};
-        //esp_hidd_send_keyboard_value(hid_conn_id, 0, &key_vaule, 1);
-        // esp_hidd_send_consumer_value(hid_conn_id, HID_CONSUMER_VOLUME_UP, true);
-        // ESP_LOGI(TAG, "Leftclick: %d\r", mouse_report->buttons.val);
-        /*
-        #ifdef DELL
-        int16_t *temp_pot;
-        temp_pot = &mouse_report->displacement[0];
-        int16_t x_disp = *temp_pot;
-        // x_disp = x_disp >> 4;
-        x_disp = (x_disp & 0x0800) ? (x_disp | 0xf800) : (x_disp & 0x07ff);
-        temp_pot = &mouse_report->displacement[1];
-        int16_t y_disp = *temp_pot;
-        y_disp = y_disp >> 4;
-        y_disp = (y_disp & 0x0800) ? (y_disp | 0xf800) : (y_disp & 0x07ff);
-        esp_hidd_send_mouse_value(hid_conn_id, mouse_report->buttons.val, x_disp, y_disp, mouse_report->z_displacement);
-        #endif
-        */
-        // #ifdef LOGITECH
-        // uint16_t mouse_button = mouse_report->buttons.val >> 8;
-        /*
-        hid_mouse_input_report_boot_t evt;
-        memcpy(&evt, mouse_report, sizeof(hid_mouse_input_report_boot_t));
-        if (xQueueSend(g_usbhid_queue, &evt, USBHID_MAX_DELAY) != pdTRUE) {
-            ESP_LOGW(TAG, "Send receive queue fail");
-        }
-        */
         hold_hid_reports.buttons.val = hold_hid_reports.buttons.val | mouse_report->buttons.val;
         hold_hid_reports.displacement[0] += mouse_report->displacement[0];
         hold_hid_reports.displacement[1] += mouse_report->displacement[1];
@@ -531,6 +528,18 @@ static void ble_hid_sender()
 {
     uint8_t buffer[HID_MOUSE_IN_RPT_LEN];
     hid_mouse_input_report_queue_t evt;
+	// const wifi_ieee80211_packet_t ipkt;
+    uint8_t wl_payload[HID_MOUSE_IN_RPT_LEN + sizeof(wifi_ieee80211_packet_t)/sizeof(uint8_t)];
+    wifi_ieee80211_packet_t* ipkt = (wifi_ieee80211_packet_t*) wl_payload;
+    ipkt->hdr.frame_ctrl[0] = 0x08;
+    ipkt->hdr.frame_ctrl[1] = 0x00;
+    ipkt->hdr.duration_id[0] = 0x00;
+    ipkt->hdr.duration_id[1] = 0x00;
+    const uint8_t paired_mac[6] = {0x9F, 0xFF, 0xFF, 0xFF, 0xFF, 0xF9};
+    ipkt->payload[0] = 0x20;
+    memcpy(ipkt->hdr.addr2 , paired_mac, 6*sizeof(uint8_t));
+    memcpy(ipkt->hdr.addr1, paired_mac, 6*sizeof(uint8_t));
+    esp_wifi_80211_tx(WIFI_IF_AP, wl_payload, HID_MOUSE_IN_RPT_LEN * sizeof(uint8_t) + sizeof(wifi_ieee80211_packet_t), false);
     // need_send = 1;
     // initial
     if (xQueueSend(g_blehid_queue, &need_send, USBHID_MAX_DELAY) != pdTRUE) 
@@ -538,24 +547,37 @@ static void ble_hid_sender()
     while (xQueueReceive(g_usbhid_queue, &evt, portMAX_DELAY) == pdTRUE)
     {// wait for the packing of data from usb
         // vTaskSuspendAll ();
-        buffer[0] = evt.buttons.val;                    // Buttons
-        buffer[1] = evt.z_displacement;                 // Wheel
-        buffer[2] = evt.displacement[0];                // X
-        buffer[3] = evt.displacement[0] >> 8;           // X lower
-        buffer[4] = evt.displacement[1];                // Y
-        buffer[5] = evt.displacement[1] >> 8;           // Y lower
         // ESP_LOGI(HID_LE_PRF_TAG, "Leftclick: %d\r", buffer[0]);
-        hid_dev_send_report(hidd_le_env.gatt_if, hid_conn_id,
-                            HID_RPT_ID_MOUSE_IN, HID_REPORT_TYPE_INPUT, HID_MOUSE_IN_RPT_LEN, buffer);
-        // send calling queue back to usb func and ask for next commands for send
-        // ESP_LOGW(TAG, "Current BLE Include %d reports, overall %lld us", evt.steps, evt._time_stamp);
-        // _last_time_stamp = evt._time_stamp;
-        // wait here for rough 0.5ms for balance
-        // usleep(700);
-        vTaskDelay(2 / portTICK_PERIOD_MS);
-        if (xQueueSend(g_blehid_queue, &need_send, USBHID_MAX_DELAY) != pdTRUE)
-            { ESP_LOGW(TAG, "Send receive queue fail"); }
-        // xTaskResumeAll();
+        if (system_mode == DEV_BLE_CONN_MODE && sec_conn)
+        {
+            buffer[0] = evt.buttons.val;                    // Buttons
+            buffer[1] = evt.z_displacement;                 // Wheel
+            buffer[2] = evt.displacement[0];                // X
+            buffer[3] = evt.displacement[0] >> 8;           // X lower
+            buffer[4] = evt.displacement[1];                // Y
+            buffer[5] = evt.displacement[1] >> 8;           // Y lower
+            hid_dev_send_report(hidd_le_env.gatt_if, hid_conn_id,
+                                HID_RPT_ID_MOUSE_IN, HID_REPORT_TYPE_INPUT, HID_MOUSE_IN_RPT_LEN, buffer);
+            // send calling queue back to usb func and ask for next commands for send
+            // ESP_LOGW(TAG, "Current BLE Include %d reports, overall %lld us", evt.steps, evt._time_stamp);
+            // _last_time_stamp = evt._time_stamp;
+            // wait here for rough 0.5ms for balance
+            // 3ms delay to make the usb reach 1000hz while the ble reach 180hz
+            vTaskDelay(3 / portTICK_PERIOD_MS);
+            if (xQueueSend(g_blehid_queue, &need_send, USBHID_MAX_DELAY) != pdTRUE)
+                { ESP_LOGW(TAG, "Send receive queue fail"); }
+            // xTaskResumeAll();
+        }
+        else if (system_mode == DEV_WIFI_CONN_MODE)
+        {
+            ipkt->payload[0] = evt.buttons.val;                    // Buttons
+            ipkt->payload[1] = evt.z_displacement;                 // Wheel
+            ipkt->payload[2] = evt.displacement[0];                // X
+            ipkt->payload[3] = evt.displacement[0] >> 8;           // X lower
+            ipkt->payload[4] = evt.displacement[1];                // Y
+            ipkt->payload[5] = evt.displacement[1] >> 8;           // Y lower
+            esp_wifi_80211_tx(WIFI_IF_AP, wl_payload, HID_MOUSE_IN_RPT_LEN * sizeof(uint8_t) + sizeof(wifi_ieee80211_packet_t), false);
+        }
     }
 }
 
@@ -779,54 +801,43 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
     }
 }
 
-void hid_demo_task(void *pvParameters)
+void initializeWireLess()
 {
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-    send_volum_up = true;
-    while(1) {
-        vTaskDelay(10 / portTICK_PERIOD_MS);
-        if (sec_conn) {
-            // ESP_LOGI(HID_DEMO_TAG, "Send the movement");
-            //uint8_t key_vaule = {HID_KEY_A};
-            //esp_hidd_send_keyboard_value(hid_conn_id, 0, &key_vaule, 1);
-            // esp_hidd_send_consumer_value(hid_conn_id, HID_CONSUMER_VOLUME_UP, true);
-            if (send_volum_up) { esp_hidd_send_mouse_value(hid_conn_id, 0, -10, 0, 0); send_volum_up = false;}
-            else {esp_hidd_send_mouse_value(hid_conn_id, 0, +10, 0, 0); send_volum_up = true;}
-        }
-    }
+    ESP_ERROR_CHECK(esp_netif_init());
+	ESP_ERROR_CHECK(esp_event_loop_create_default());
+	esp_netif_create_default_wifi_ap();
+
+	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+
+	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+	ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+
+	// Init dummy AP to specify a channel and get WiFi hardware into
+	// a mode where we can send the actual fake beacon frames.
+	ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+	wifi_config_t ap_config = {
+		.ap = {
+			.ssid = "esp32-beaconspam",
+			.ssid_len = 0,
+			.password = "dummypassword",
+			.channel = 1,
+			.authmode = WIFI_AUTH_WPA2_PSK,
+			.ssid_hidden = 1,
+			.max_connection = 4,
+			.beacon_interval = 60000
+		}
+	};
+
+	ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+    esp_wifi_config_80211_tx_rate(WIFI_IF_AP, WIFI_PHY_RATE_36M);
+	ESP_ERROR_CHECK(esp_wifi_start());
+	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
-
-void app_main(void)
+/* Setup BLE Mode */
+void initializeBLE()
 {
     esp_err_t ret;
-
-    // Initialize NVS.
-    ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK( ret );
-
-    g_usbhid_queue = xQueueCreate(USBHID_QUEUE_SIZE, sizeof(hid_mouse_input_report_queue_t));
-    if (g_usbhid_queue == NULL) {
-        ESP_LOGE(TAG, "Create mutex fail");
-        return;
-    }
-
-    g_blehid_queue = xQueueCreate(USBHID_QUEUE_SIZE, sizeof(uint8_t));
-    if (g_blehid_queue == NULL) {
-        ESP_LOGE(TAG, "Create mutex fail");
-        return;
-    }
-
-    // Set the LEDC peripheral configuration
-    // example_ledc_init();
-    // Set duty to 50%
-    // ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, LEDC_DUTY));
-    // Update duty to apply the new value
-    // ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_CHANNEL));
 
     ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
 
@@ -878,8 +889,41 @@ void app_main(void)
     and the init key means which key you can distribute to the slave. */
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(uint8_t));
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
+}
 
-    // xTaskCreate(&hid_demo_task, "hid_task", 2048, NULL, 5, NULL);
+void app_main(void)
+{
+    esp_err_t ret;
+
+    // Initialize NVS.
+    ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK( ret );
+
+    g_usbhid_queue = xQueueCreate(USBHID_QUEUE_SIZE, sizeof(hid_mouse_input_report_queue_t));
+    if (g_usbhid_queue == NULL) {
+        ESP_LOGE(TAG, "Create mutex fail");
+        return;
+    }
+
+    g_blehid_queue = xQueueCreate(USBHID_QUEUE_SIZE, sizeof(uint8_t));
+    if (g_blehid_queue == NULL) {
+        ESP_LOGE(TAG, "Create mutex fail");
+        return;
+    }
+
+    if (system_mode == DEV_BLE_CONN_MODE)
+    {
+        /* Setup BLE Mode */
+        initializeBLE();
+    }
+    else
+    {
+        initializeWireLess();
+    }
 
     TaskHandle_t usb_events_task_handle;
     TaskHandle_t blehid_proc_handle;
