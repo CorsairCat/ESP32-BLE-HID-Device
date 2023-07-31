@@ -529,7 +529,7 @@ static void ble_hid_sender()
     uint8_t buffer[HID_MOUSE_IN_RPT_LEN];
     hid_mouse_input_report_queue_t evt;
 	// const wifi_ieee80211_packet_t ipkt;
-    uint8_t wl_payload[HID_MOUSE_IN_RPT_LEN + sizeof(wifi_ieee80211_packet_t)/sizeof(uint8_t)];
+    uint8_t wl_payload[(sizeof(hid_mouse_input_report_queue_t) + sizeof(wifi_ieee80211_packet_t))/sizeof(uint8_t)];
     wifi_ieee80211_packet_t* ipkt = (wifi_ieee80211_packet_t*) wl_payload;
     ipkt->hdr.frame_ctrl[0] = 0x08;
     ipkt->hdr.frame_ctrl[1] = 0x00;
@@ -570,13 +570,8 @@ static void ble_hid_sender()
         }
         else if (system_mode == DEV_WIFI_CONN_MODE)
         {
-            ipkt->payload[0] = evt.buttons.val;                    // Buttons
-            ipkt->payload[1] = evt.z_displacement;                 // Wheel
-            ipkt->payload[2] = evt.displacement[0];                // X
-            ipkt->payload[3] = evt.displacement[0] >> 8;           // X lower
-            ipkt->payload[4] = evt.displacement[1];                // Y
-            ipkt->payload[5] = evt.displacement[1] >> 8;           // Y lower
-            esp_wifi_80211_tx(WIFI_IF_AP, wl_payload, HID_MOUSE_IN_RPT_LEN * sizeof(uint8_t) + sizeof(wifi_ieee80211_packet_t), false);
+            memcpy(ipkt->payload, &evt, sizeof(hid_mouse_input_report_queue_t));
+            esp_wifi_80211_tx(WIFI_IF_AP, wl_payload, sizeof(hid_mouse_input_report_queue_t) + sizeof(wifi_ieee80211_packet_t), false);
         }
     }
 }

@@ -4,3 +4,7 @@
 + Under BLE: 180Hz update rate
 + Under Wireless: 1000Hz update rate
 + BLE support more than 2 pair devices switch
+
+## TODOs
++ add pair method
++ add the switching between the BLE mode and Wireless Mode
